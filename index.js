@@ -2,7 +2,10 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
+import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
+import { createUserContent } from "@google/genai/node";
+import { createPartFromUri } from "@google/genai/web";
 
 // inisialisasi aplikasi
 //
@@ -22,7 +25,7 @@ const appPort = process.env.APP_PORT || 3001;
 const geminiModel = process.env.GEMINI_MODEL;
 
 const app = express();
-const upload = multer(); // akan digunakan di dalam recording
+const upload = multer({ dest: "uploads/" }); // akan digunakan di dalam recording
 const ai = new GoogleGenAI({}); //instantiation menjadi object instance (OOP - Object Oriented Programming)
 
 // inisialisasi middleware
@@ -86,6 +89,80 @@ app.post("/generate-text", async (req, res) => {
     });
   }
 });
+
+app.post("/generate-from-image", upload.single("image"), async (req, res) => {
+  const { prompt = "Describe this uploaded image" } = req.body;
+
+  try {
+    const image = await ai.files.upload({
+      file: req.file.path,
+      config: {
+        mimeType: req.file.mimetype,
+      },
+    });
+
+    const result = await ai.models.generateContent({
+      model: geminiModel,
+      contents: [
+        createUserContent([
+          prompt,
+          createPartFromUri(image.uri, image.mimeType),
+        ]),
+      ],
+    });
+
+    res.json({ output: result.text });
+  } catch (e) {
+    console.error("Error generating content:", e);
+    res.status(500).json({
+      success: false,
+      message: "Gagal, kayaknya server lagi bermasalah!",
+      data: aiResponse.text,
+    });
+  } finally {
+    // Cleanup uploaded file
+    fs.unlinkSync(req.file.path);
+  }
+});
+
+app.post(
+  "/generate-from-document",
+  upload.single("document"),
+  async (req, res) => {
+    const { prompt = "Describe this uploaded document" } = req.body;
+
+    try {
+      const filePath = req.file.path;
+      const buffer = fs.readFileSync(filePath);
+      const base64Data = buffer.toString("base64");
+      const mimeType = req.file.mimetype;
+
+      const documentPart = {
+        inlineData: {
+          data: base64Data,
+          mimeType,
+        },
+      };
+
+      const result = await ai.models.generateContent({
+        model: geminiModel,
+        contents: [createUserContent([prompt, documentPart])],
+      });
+
+      res.json({ output: result.text });
+    } catch (e) {
+      console.error("Error generating content:", e);
+      res.status(500).json({
+        success: false,
+        message: "Gagal, kayaknya server lagi bermasalah!",
+        data: aiResponse.text,
+      });
+    } finally {
+      // Cleanup uploaded file
+      fs.unlinkSync(req.file.path);
+    }
+  },
+);
 
 // server-nya harus di-serve dulu!
 app.listen(appPort, () => {
